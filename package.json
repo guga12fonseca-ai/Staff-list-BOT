@@ -1,0 +1,17 @@
+{
+  "name": "staff-list",
+  "version": "1.0.0",
+  "description": "Staff List - painel de cargos e membros para Discord",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "deploy": "node deploy-commands.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "discord.js": "^14.25.1",
+    "dotenv": "^16.4.7"
+  }
+}
