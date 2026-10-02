@@ -12,6 +12,8 @@ const {
   ButtonStyle,
   RoleSelectMenuBuilder,
   ChannelSelectMenuBuilder,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
   ChannelType,
   ModalBuilder,
   TextInputBuilder,
@@ -22,8 +24,6 @@ const {
 const DATA_FILE = path.join(__dirname, "data.json");
 const MAX_EMBEDS_PER_MESSAGE = 10;
 const EMBED_DESCRIPTION_LIMIT = 4096;
-const ROLE_EMBED_FOOTER = "By: venny";
-
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -54,8 +54,9 @@ function saveData() {
 
 function guildConfig(guildId) {
   if (!data.guilds[guildId]) {
-    data.guilds[guildId] = { panels: {} };
+    data.guilds[guildId] = { panels: {}, requiredPermission: "ManageGuild" };
   }
+  if (!data.guilds[guildId].requiredPermission) data.guilds[guildId].requiredPermission = "ManageGuild";
   return data.guilds[guildId];
 }
 
@@ -63,9 +64,33 @@ function createId() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function isAdmin(interaction) {
-  return interaction.memberPermissions?.has(PermissionsBitField.Flags.ManageGuild) ||
-         interaction.memberPermissions?.has(PermissionsBitField.Flags.Administrator);
+const DEFAULT_REQUIRED_PERMISSION = PermissionsBitField.Flags.ManageGuild;
+
+const STAFF_PERMISSION_OPTIONS = [
+  { value: "ManageGuild", label: "Gerenciar servidor", description: "Pode gerenciar as configurações do servidor." },
+  { value: "ManageChannels", label: "Gerenciar canais", description: "Pode gerenciar canais do servidor." },
+  { value: "ManageRoles", label: "Gerenciar cargos", description: "Pode gerenciar cargos do servidor." },
+  { value: "KickMembers", label: "Expulsar membros", description: "Pode expulsar membros do servidor." },
+  { value: "BanMembers", label: "Banir membros", description: "Pode banir membros do servidor." },
+  { value: "ModerateMembers", label: "Moderar membros", description: "Pode aplicar timeout em membros." }
+];
+
+function permissionFlag(panelConfig) {
+  const key = panelConfig?.requiredPermission || "ManageGuild";
+  return PermissionsBitField.Flags[key] || DEFAULT_REQUIRED_PERMISSION;
+}
+
+function permissionLabel(permissionKey) {
+  return STAFF_PERMISSION_OPTIONS.find((option) => option.value === permissionKey)?.label || "Gerenciar servidor";
+}
+
+function hasStaffAccess(interaction) {
+  const member = interaction.member;
+  if (!member) return false;
+  if (member.permissions?.has(PermissionsBitField.Flags.Administrator)) return true;
+
+  const config = guildConfig(interaction.guild.id);
+  return member.permissions?.has(permissionFlag(config));
 }
 
 function shortText(text, max = 80) {
@@ -138,7 +163,6 @@ function buildRoleEmbeds(guild, role, panel) {
       .setColor(roleColor)
       .setTitle(`${role.name} (${members.length})`)
       .setDescription(chunk.join(panel.compact ? " " : "\n"))
-      .setFooter({ text: ROLE_EMBED_FOOTER });
 
     if (chunks.length > 1) {
       embed.setAuthor({
@@ -204,6 +228,7 @@ function configRows(panelId) {
 
 function configEmbed(guild, panel) {
   const totalMembers = panel.roles.reduce((sum, roleId) => sum + memberCountForRole(guild, roleId), 0);
+  const config = guildConfig(guild.id);
 
   return new EmbedBuilder()
     .setColor(0x5865F2)
@@ -215,7 +240,6 @@ function configEmbed(guild, panel) {
       `🔄 Atualização automática: **Ativada**\n` +
       `📍 Canal: ${panel.channelId ? `<#${panel.channelId}>` : "Não configurado"}`
     )
-    .setFooter({ text: ROLE_EMBED_FOOTER });
 }
 
 function createPanel(guild, title, channelId) {
@@ -249,7 +273,6 @@ async function buildPanelPages(guild, panel) {
   const header = new EmbedBuilder()
     .setColor(0x5865F2)
     .setTitle(panel.title)
-    .setFooter({ text: ROLE_EMBED_FOOTER });
 
   if (panel.description) {
     header.setDescription(panel.description);
@@ -351,7 +374,6 @@ async function showPanelSelector(interaction) {
           .setColor(0x5865F2)
           .setTitle("📋 Staff List")
           .setDescription("Você ainda não configurou nenhum painel.")
-          .setFooter({ text: ROLE_EMBED_FOOTER })
       ],
       components: [
         new ActionRowBuilder().addComponents(
@@ -379,7 +401,6 @@ async function showPanelSelector(interaction) {
         .setColor(0x5865F2)
         .setTitle("📋 Staff List")
         .setDescription("Escolha o painel que deseja administrar.")
-        .setFooter({ text: ROLE_EMBED_FOOTER })
     ],
     components: [new ActionRowBuilder().addComponents(buttons)],
     ephemeral: true
@@ -448,9 +469,9 @@ async function openSettings(interaction, panelId) {
     .setDescription(
       `**Ordem dos membros:** ${panel.memberOrder === "name" ? "Alfabética" : panel.memberOrder === "joined" ? "Entrada no servidor" : "ID"}\n` +
       `**Estilo:** ${panel.compact ? "Compacto" : "Espaçado"}\n` +
-      `**Canal:** ${panel.channelId ? `<#${panel.channelId}>` : "Não configurado"}`
+      `**Canal:** ${panel.channelId ? `<#${panel.channelId}>` : "Não configurado"}\n` +
+      `**Permissão de acesso:** ${permissionLabel(guildConfig(interaction.guild.id).requiredPermission)}`
     )
-    .setFooter({ text: ROLE_EMBED_FOOTER });
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`sl:memberorder:${panelId}:name`).setLabel("A-Z").setStyle(panel.memberOrder === "name" ? ButtonStyle.Success : ButtonStyle.Secondary),
@@ -470,9 +491,24 @@ async function openSettings(interaction, panelId) {
     new ButtonBuilder().setCustomId(`sl:nickname:${panelId}`).setLabel("Alterar nome do bot").setEmoji("🤖").setStyle(ButtonStyle.Primary)
   );
 
+  const permissionRow = new ActionRowBuilder().addComponents(
+    new StringSelectMenuBuilder()
+      .setCustomId(`sl:permission:${panelId}`)
+      .setPlaceholder("Definir permissão para usar o Staff List")
+      .addOptions(
+        STAFF_PERMISSION_OPTIONS.map((option) =>
+          new StringSelectMenuOptionBuilder()
+            .setLabel(option.label)
+            .setDescription(option.description)
+            .setValue(option.value)
+            .setDefault(guildConfig(interaction.guild.id).requiredPermission === option.value)
+        )
+      )
+  );
+
   await interaction.reply({
     embeds: [embed],
-    components: [row, channelRow, nicknameRow],
+    components: [row, channelRow, nicknameRow, permissionRow],
     ephemeral: true
   });
 }
@@ -520,7 +556,6 @@ function orderEmbed(guild, panel) {
     .setColor(0x5865F2)
     .setTitle("↕️ Ordenar cargos")
     .setDescription(lines.length ? lines.join("\n") : "Nenhum cargo configurado.")
-    .setFooter({ text: "Use os botões para mover o cargo selecionado • By: venny" });
 }
 
 function orderRow(panel) {
@@ -688,15 +723,27 @@ async function handleModal(interaction) {
 
   if (parts[2] === "create") {
     const title = interaction.fields.getTextInputValue("title").trim();
-    const panel = createPanel(interaction.guild, title, interaction.channelId);
+    // O painel só é publicado depois que o administrador escolher o canal.
+    const panel = createPanel(interaction.guild, title, null);
+
+    const channelRow = new ActionRowBuilder().addComponents(
+      new ChannelSelectMenuBuilder()
+        .setCustomId(`sl:channel:${panel.id}`)
+        .setPlaceholder("Escolha onde o painel ficará")
+        .setChannelTypes(ChannelType.GuildText)
+    );
 
     await interaction.reply({
-      embeds: [configEmbed(interaction.guild, panel)],
-      components: configRows(panel.id),
+      embeds: [
+        configEmbed(interaction.guild, panel),
+        new EmbedBuilder()
+          .setColor(0x57F287)
+          .setTitle("📍 Defina o canal do painel")
+          .setDescription("Escolha abaixo o canal onde o Staff List será publicado. O painel será enviado automaticamente após a seleção.")
+      ],
+      components: [...configRows(panel.id), channelRow],
       ephemeral: true
     });
-
-    await sendOrRepairPanel(interaction.guild, panel);
     return;
   }
 
@@ -775,6 +822,23 @@ async function handleSelect(interaction) {
     return interaction.update({ content: "📍 Canal atualizado e painel publicado.", components: [], embeds: [] });
   }
 
+  if (action === "permission") {
+    const selectedPermission = interaction.values[0];
+    if (!STAFF_PERMISSION_OPTIONS.some((option) => option.value === selectedPermission)) {
+      return interaction.reply({ content: "❌ Permissão inválida.", ephemeral: true });
+    }
+
+    const config = guildConfig(interaction.guild.id);
+    config.requiredPermission = selectedPermission;
+    saveData();
+
+    return interaction.update({
+      content: `🔐 Permissão atualizada: **${permissionLabel(selectedPermission)}**.`,
+      components: [],
+      embeds: []
+    });
+  }
+
   if (action === "orderrole") {
     panel.selectedOrderRole = interaction.values[0];
     saveData();
@@ -787,8 +851,14 @@ async function handleSelect(interaction) {
 }
 
 async function handleInteraction(interaction) {
-  if (!isAdmin(interaction)) {
-    return interaction.reply({ content: "Você precisa de **Gerenciar Servidor** ou **Administrador** para usar o Staff List.", ephemeral: true });
+  if (!interaction.guild) return;
+
+  if (!hasStaffAccess(interaction)) {
+    const config = guildConfig(interaction.guild.id);
+    return interaction.reply({
+      content: `❌ Você não tem a permissão necessária para usar o Staff List.\n🔐 Permissão exigida: **${permissionLabel(config.requiredPermission)}**.`,
+      ephemeral: true
+    });
   }
 
   if (interaction.isChatInputCommand() && interaction.commandName === "staff") {
