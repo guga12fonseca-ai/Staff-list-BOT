@@ -16,14 +16,13 @@ const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
 
 async function main() {
   const clientId = process.env.CLIENT_ID;
-  const guildId = process.env.GUILD_ID;
 
-  if (!process.env.DISCORD_TOKEN || !clientId || !guildId) {
-    throw new Error("Preencha DISCORD_TOKEN, CLIENT_ID e GUILD_ID.");
+  if (!process.env.DISCORD_TOKEN || !clientId) {
+    throw new Error("Preencha DISCORD_TOKEN e CLIENT_ID.");
   }
-
+  
   await rest.put(
-    Routes.applicationGuildCommands(clientId, guildId),
+    Routes.applicationCommands(clientId),
     { body: [command.toJSON()] }
   );
 
